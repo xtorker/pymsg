@@ -99,10 +99,12 @@ class BrowserAuth:
                 cookies = await context.cookies()
                 captured_data['cookies'] = {c['name']: c['value'] for c in cookies}
                 
-                # Cleanup
-                if user_data_dir:
-                    await context.close()
-                else:
+                # Explicitly close page and context to ensure browser window closes
+                print("[*] Closing browser...")
+                await page.close()
+                await context.close()
+                # For non-persistent context, also close browser
+                if not user_data_dir:
                     await browser.close()
                     
                 return captured_data

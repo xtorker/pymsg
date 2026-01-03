@@ -145,7 +145,7 @@ class HinatazakaClient:
         result = await self.fetch_json(session, f"/groups/{group_id}/members")
         return result or []
 
-    async def get_messages(self, session: aiohttp.ClientSession, group_id: int, since_id: Optional[int] = None, progress_callback=None) -> List[Dict[str, Any]]:
+    async def get_messages(self, session: aiohttp.ClientSession, group_id: int, since_id: Optional[int] = None, max_id: Optional[int] = None, progress_callback=None) -> List[Dict[str, Any]]:
         """
         Fetch all new messages from a group's timeline.
         Automatically handles pagination to retrieve all messages newer than `since_id`.
@@ -155,6 +155,7 @@ class HinatazakaClient:
             group_id: The ID of the group/artist.
             since_id: The message ID to start fetching from (exclusive). 
                       If None, fetches widely recent history (limited by API/loop).
+            max_id: Ignored by API, kept for compatibility.
             progress_callback: Optional async function(date_str, count) to call on each page.
 
         Returns:
@@ -171,6 +172,15 @@ class HinatazakaClient:
             }
             if current_continuation:
                 params["continuation"] = current_continuation
+            
+            # Pass max_id if provided (for first page usually, or if API supports it natively in params)
+            # Reverse engineering assumption: API supports 'max_id' or similar. 
+            # Or we filter client side? 
+            # If we want *older* messages, we usually page *backwards*.
+            # But here `order=desc` gives newest first.
+            # If we provide `max_id`, API should return messages with ID < max_id.
+            if max_id and page == 0 and not current_continuation:
+                params["max_id"] = max_id
             
             data = await self.fetch_json(session, f"/groups/{group_id}/timeline", params)
             if not data:
@@ -249,3 +259,42 @@ class HinatazakaClient:
         except:
             pass
         return False
+
+    async def download_message_media(self, session: aiohttp.ClientSession, message: Dict[str, Any], output_dir: Path) -> Optional[Path]:
+        """
+        Download media associated with a message to the specified directory.
+        Organizes files into subdirectories by type (picture, video, voice).
+        
+        Args:
+            session: Active aiohttp session.
+            message: Message dictionary from API.
+            output_dir: Root directory for the member (files will be in type subdirs).
+            
+        Returns:
+            Path to the downloaded file, or None if no media/download failed.
+        """
+        raw_type = message.get('type')
+        msg_type = 'text'
+        if raw_type in ['image', 'picture']: msg_type = 'picture'
+        elif raw_type in ['video', 'movie']: msg_type = 'video'
+        elif raw_type == 'voice': msg_type = 'voice'
+        
+        media_url = message.get('file') or message.get('thumbnail')
+        if not media_url or msg_type == 'text':
+            return None
+            
+        try:
+            ext = get_media_extension(media_url, raw_type)
+            target_dir = output_dir / msg_type
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            filename = f"{message['id']}.{ext}"
+            filepath = target_dir / filename
+            
+            if await self.download_file(session, media_url, filepath):
+                return filepath
+        except Exception as e:
+            # print(f"Download error: {e}")
+            pass
+            
+        return None
